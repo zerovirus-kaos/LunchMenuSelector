@@ -2,8 +2,8 @@ export const DISTANCE_SCORE = { near: 3, medium: 2, far: 1 };
 
 // 맛의 비중이 가장 크도록 항목별 가중치를 명시적으로 둔다 (합계 100점 만점)
 const TASTE_WEIGHT = 60;
-const DISTANCE_WEIGHT = 25;
-const MEAL_TICKET_WEIGHT = 15;
+const DISTANCE_WEIGHT = 15;
+const MEAL_TICKET_WEIGHT = 25;
 
 function average(values) {
   if (values.length === 0) return 0;
