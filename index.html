@@ -70,11 +70,14 @@
 
   function getReady() {
     const names = getNames();
-    if (!isWatching && !raceRunning) {
-      window.roulette.setMarbles(names);
-    }
     ready = names.length > 0;
     localStorage.setItem('mbr_names', names.join(','));
+
+    // 레이스가 진행 중이거나(꼴찌 모드는 마블이 골인할 때마다 _marbles.length가 줄어들어
+    // 등수 재계산이 꼬임) 관람 중이면, 배경 새로고침이 엔진 상태를 절대 건드리면 안 됨
+    if (isWatching || raceRunning) return;
+
+    window.roulette.setMarbles(names);
     switch (winnerType) {
       case 'first':
         setWinnerRank(1);
@@ -260,7 +263,7 @@
   }
 
 
-  function applyRestaurants(list) {
+  function applyRestaurants(list, pushToEngine = true) {
     restaurantsCache = list;
     const nickname = getNickname();
     const listEl = document.querySelector('#restaurantList');
@@ -290,12 +293,20 @@
       .join(',');
 
     document.querySelector('#in_names').value = namesStr;
-    getReady();
+
+    // 배경 자동 새로고침(폴링)은 목록 표시만 갱신하고, 실행 중이거나 방금 끝난
+    // 룰렛 엔진은 절대 건드리지 않는다 — 셔플/추가/평가/삭제 같은 명시적 행동에서만 반영
+    if (pushToEngine) {
+      getReady();
+    } else {
+      ready = namesStr.length > 0;
+      localStorage.setItem('mbr_names', namesStr);
+    }
   }
 
-  async function refreshRestaurants() {
+  async function refreshRestaurants(pushToEngine = true) {
     try {
-      applyRestaurants(await apiGetRestaurants());
+      applyRestaurants(await apiGetRestaurants(), pushToEngine);
     } catch (e) {
       console.error(e);
     }
@@ -373,7 +384,7 @@
     refreshRestaurants();
     setInterval(() => {
       if (!document.querySelector('#restaurantDialog').open) {
-        refreshRestaurants();
+        refreshRestaurants(false);
       }
     }, 15000);
 
@@ -463,6 +474,7 @@
     });
 
     document.querySelector('#btnShuffle').addEventListener('click', () => {
+      raceRunning = false;
       getReady();
     });
 
@@ -531,7 +543,6 @@
 
     window.roulette.addEventListener('goal', () => {
       ready = false;
-      raceRunning = false;
       if (broadcastInterval) {
         // 방금 확정된 winnerId가 담긴 마지막 프레임을 반드시 한 번 더 보낸 뒤 중계를 멈춘다
         sendWs({ type: 'frame', ...window.roulette.getSnapshotForBroadcast() });
@@ -539,6 +550,8 @@
       stopBroadcasting();
       setTimeout(() => {
         document.querySelector('#settings').classList.remove('hide');
+        // 우승자 화면이 다 보여진 뒤에야 배경 새로고침이 다시 엔진을 건드리게 허용
+        raceRunning = false;
         stopWatching();
       }, 3000);
     });
