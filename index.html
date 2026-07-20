@@ -70,7 +70,9 @@
 
   function getReady() {
     const names = getNames();
-    window.roulette.setMarbles(names);
+    if (!isWatching) {
+      window.roulette.setMarbles(names);
+    }
     ready = names.length > 0;
     localStorage.setItem('mbr_names', names.join(','));
     switch (winnerType) {
@@ -107,6 +109,245 @@
 
   let ready = false;
   let winnerType = 'first';
+  let restaurantsCache = [];
+  let pendingEditId = null;
+  let matchedRestaurant = null;
+
+  let ws = null;
+  let broadcastInterval = null;
+  let isWatching = false;
+
+  function connectWs(useDirect) {
+    const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    // parcel의 dev 프록시는 웹소켓 업그레이드 이후 프레임을 깨뜨리는 버그가 있어서,
+    // 같은 출처 경로가 실패하면 백엔드 포트로 직접 재연결한다 (운영 환경은 같은 출처라 영향 없음).
+    const target = useDirect
+      ? `${protocol}${location.hostname}:4000/api/ws`
+      : `${protocol}${location.host}/api/ws`;
+    ws = new WebSocket(target);
+    ws.addEventListener('message', (e) => {
+      let msg;
+      try {
+        msg = JSON.parse(e.data);
+      } catch (err) {
+        return;
+      }
+      if (msg.type === 'start') {
+        handleRemoteStart(msg);
+      } else if (msg.type === 'frame' && isWatching) {
+        window.roulette.applyRemoteFrame(msg);
+      }
+    });
+    ws.addEventListener('error', () => {
+      if (!useDirect) ws.close();
+    });
+    ws.addEventListener('close', () => {
+      setTimeout(() => connectWs(true), useDirect ? 2000 : 300);
+    });
+  }
+
+  function sendWs(payload) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+  }
+
+  function stopBroadcasting() {
+    if (broadcastInterval) {
+      clearInterval(broadcastInterval);
+      broadcastInterval = null;
+    }
+  }
+
+  function handleRemoteStart(msg) {
+    isWatching = true;
+    ready = false;
+    window.roulette.enterRemoteMode(msg);
+    document.querySelector('#settings').classList.add('hide');
+    document.querySelector('#sltMap').disabled = true;
+    document.querySelector('#btnStart').disabled = true;
+    document.querySelector('#btnShuffle').disabled = true;
+    simpleToast(`'${msg.hostNickname}'님과 함께 룰렛을 봅니다`);
+  }
+
+  function stopWatching() {
+    if (!isWatching) return;
+    isWatching = false;
+    window.roulette.exitRemoteMode();
+    document.querySelector('#sltMap').disabled = false;
+    document.querySelector('#btnStart').disabled = false;
+    document.querySelector('#btnShuffle').disabled = false;
+  }
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function simpleToast(msg) {
+    const toast = document.createElement('div');
+    toast.classList.add('toast');
+    toast.innerHTML = msg;
+
+    if (window.translateElement) {
+      console.log('try to translate');
+      window.translateElement(toast);
+    }
+
+    document.body.appendChild(toast);
+    setTimeout(() => {
+      document.body.removeChild(toast);
+    }, 1200);
+  }
+
+  const ALLOWED_NICKNAMES = ['lm', 'zv', 'kb', 'ko'];
+
+  function getNickname() {
+    const value = (localStorage.getItem('lunch_nickname') || '').trim();
+    return ALLOWED_NICKNAMES.includes(value) ? value : '';
+  }
+
+  function setNickname(nickname) {
+    localStorage.setItem('lunch_nickname', nickname.trim());
+  }
+
+  function showNicknameGate() {
+    document.documentElement.classList.remove('nick-chosen');
+  }
+
+  function updateNicknameLabel() {
+    const label = document.querySelector('#currentNicknameLabel');
+    if (label) label.textContent = getNickname();
+  }
+
+  function enterAppWithNickname(nickname) {
+    setNickname(nickname);
+    document.documentElement.classList.add('nick-chosen');
+    updateNicknameLabel();
+    applyRestaurants(restaurantsCache);
+    simpleToast(`'${nickname}'님, 환영합니다!`);
+  }
+
+  async function apiGetRestaurants() {
+    const res = await fetch('/api/restaurants');
+    if (!res.ok) throw new Error('failed to load restaurants');
+    return res.json();
+  }
+
+  async function apiCreateRestaurant(payload) {
+    const res = await fetch('/api/restaurants', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return { ok: res.ok, status: res.status, body: await res.json() };
+  }
+
+  async function apiRateRestaurant(id, payload) {
+    const res = await fetch(`/api/restaurants/${id}/ratings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return { ok: res.ok, status: res.status, body: await res.json() };
+  }
+
+  async function apiDeleteRestaurant(id) {
+    const res = await fetch(`/api/restaurants/${id}`, { method: 'DELETE' });
+    return { ok: res.ok, status: res.status, body: await res.json() };
+  }
+
+
+  function applyRestaurants(list) {
+    restaurantsCache = list;
+    const nickname = getNickname();
+    const listEl = document.querySelector('#restaurantList');
+    listEl.innerHTML = '';
+
+    list.forEach((r) => {
+      const mine = r.ratings.find((rt) => rt.nickname === nickname);
+      const li = document.createElement('li');
+      li.innerHTML = `
+        <span class="r-name">${escapeHtml(r.name)}</span>
+        <span class="r-meal">식권대장 ${r.mealTicket}</span>
+        <span class="r-score">점수 ${r.score.toFixed(1)}</span>
+        <span class="r-count">${r.ballCount}개</span>
+        <span class="r-raters">${r.raterCount}명 평가</span>
+        <button class="btn-rate" data-id="${r.id}">${mine ? '평가 수정' : '평가하기'}</button>
+        <button class="btn-remove" data-id="${r.id}">삭제</button>
+      `;
+      listEl.appendChild(li);
+    });
+
+    const datalist = document.querySelector('#restaurantNames');
+    datalist.innerHTML = list.map((r) => `<option value="${escapeHtml(r.name)}"></option>`).join('');
+
+    const namesStr = list
+      .map((r) => (r.ballCount > 0 ? `${r.name}*${r.ballCount}` : null))
+      .filter((v) => !!v)
+      .join(',');
+
+    document.querySelector('#in_names').value = namesStr;
+    getReady();
+  }
+
+  async function refreshRestaurants() {
+    try {
+      applyRestaurants(await apiGetRestaurants());
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function setMealTicketDisplay(mealTicket) {
+    const row = document.querySelector('#dlg_mealTicketRow');
+    const display = document.querySelector('#dlg_mealTicketDisplay');
+    if (mealTicket) {
+      row.classList.add('hide');
+      display.classList.remove('hide');
+      display.textContent = `식권대장: ${mealTicket} (기존 식당)`;
+    } else {
+      row.classList.remove('hide');
+      display.classList.add('hide');
+    }
+  }
+
+  function openDialog(restaurant) {
+    if (!getNickname()) {
+      simpleToast('닉네임을 먼저 설정해주세요.');
+      return;
+    }
+
+    const nameInput = document.querySelector('#dlg_name');
+    const tasteInput = document.querySelector('#dlg_taste');
+    const distanceSelect = document.querySelector('#dlg_distance');
+    const mealTicketSelect = document.querySelector('#dlg_mealTicket');
+    const nickname = getNickname();
+
+    matchedRestaurant = null;
+
+    if (restaurant) {
+      pendingEditId = restaurant.id;
+      nameInput.value = restaurant.name;
+      nameInput.readOnly = true;
+      setMealTicketDisplay(restaurant.mealTicket);
+      const mine = restaurant.ratings.find((r) => r.nickname === nickname);
+      tasteInput.value = mine ? mine.taste : 5;
+      distanceSelect.value = mine ? mine.distance : 'medium';
+    } else {
+      pendingEditId = null;
+      nameInput.value = '';
+      nameInput.readOnly = false;
+      setMealTicketDisplay(null);
+      tasteInput.value = 5;
+      distanceSelect.value = 'medium';
+      mealTicketSelect.value = 'X';
+    }
+
+    document.querySelector('#restaurantDialog').showModal();
+    nameInput.focus();
+  }
 
   document.addEventListener('DOMContentLoaded', () => {
     initialize();
@@ -120,49 +361,103 @@
     }
     console.log('initializing start');
 
-    const urlParams = new URLSearchParams(window.location.search);
-    const namesFromUrl = urlParams.get('names');
-
-    if (namesFromUrl) {
-      document.querySelector('#in_names').value = namesFromUrl.replace(/,/g, '\n');
+    if (getNickname()) {
+      document.documentElement.classList.add('nick-chosen');
+      updateNicknameLabel();
     } else {
-      const savedNames = localStorage.getItem('mbr_names');
-      if (savedNames) {
-        document.querySelector('#in_names').value = savedNames;
-      }
+      showNicknameGate();
     }
-    document.querySelector('#in_names').addEventListener('input', () => {
-      getReady();
+    connectWs();
+
+    refreshRestaurants();
+    setInterval(() => {
+      if (!document.querySelector('#restaurantDialog').open) {
+        refreshRestaurants();
+      }
+    }, 15000);
+
+    document.querySelectorAll('.btn-nickname').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        enterAppWithNickname(btn.getAttribute('data-nickname'));
+      });
     });
 
-    document.querySelector('#in_names').addEventListener('blur', () => {
-      const nameSource = getNames();
-      const nameSet = new Set();
-      const nameCounts = {};
-      nameSource.forEach(nameSrc => {
-        const name = parseName(nameSrc);
-        const key = name.weight > 1 ? `${name.name}/${name.weight}` : name.name;
-        if (!nameSet.has(key)) {
-          nameSet.add(key);
-          nameCounts[key] = 0;
-        }
-        nameCounts[key] += name.count;
-      });
-      const result = [];
-      Object.keys(nameCounts).forEach(key => {
-        if (nameCounts[key] > 1) {
-          result.push(`${key}*${nameCounts[key]}`);
-        } else {
-          result.push(key);
-        }
-      });
+    document.querySelector('#btnChangeNickname').addEventListener('click', () => {
+      showNicknameGate();
+    });
 
-      const oldValue = document.querySelector('#in_names').value;
-      const newValue = result.join(',');
+    document.querySelector('#btnOpenAddDialog').addEventListener('click', () => {
+      openDialog(null);
+    });
 
-      if (oldValue !== newValue) {
-        document.querySelector('#in_names').value = newValue;
-        getReady();
+    document.querySelector('#btnCancelDialog').addEventListener('click', () => {
+      document.querySelector('#restaurantDialog').close();
+    });
+
+    document.querySelector('#restaurantDialog').addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) e.currentTarget.close();
+    });
+
+    document.querySelector('#dlg_name').addEventListener('input', (e) => {
+      if (pendingEditId !== null) return;
+      const typed = e.target.value.trim().toLowerCase();
+      matchedRestaurant = restaurantsCache.find((r) => r.name.toLowerCase() === typed) || null;
+      setMealTicketDisplay(matchedRestaurant ? matchedRestaurant.mealTicket : null);
+    });
+
+    document.querySelector('#restaurantForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const nickname = getNickname();
+
+      const name = document.querySelector('#dlg_name').value.trim();
+      const taste = parseInt(document.querySelector('#dlg_taste').value, 10);
+      const distance = document.querySelector('#dlg_distance').value;
+      const mealTicket = document.querySelector('#dlg_mealTicket').value;
+
+      if (!name) {
+        simpleToast('식당 이름을 입력해주세요.');
+        return;
+      }
+      if (Number.isNaN(taste) || taste < 1 || taste > 10) {
+        simpleToast('맛 점수는 1~10 사이로 입력해주세요.');
+        return;
+      }
+
+      const targetId = pendingEditId !== null ? pendingEditId : (matchedRestaurant ? matchedRestaurant.id : null);
+
+      let result;
+      if (targetId) {
+        result = await apiRateRestaurant(targetId, { nickname, taste, distance });
+      } else {
+        result = await apiCreateRestaurant({ name, mealTicket, nickname, taste, distance });
+        if (!result.ok && result.body.error === 'exists') {
+          result = await apiRateRestaurant(result.body.restaurantId, { nickname, taste, distance });
+        }
+      }
+
+      if (!result.ok) {
+        simpleToast(result.body.message || '오류가 발생했습니다.');
+        return;
+      }
+
+      applyRestaurants(result.body);
+      document.querySelector('#restaurantDialog').close();
+    });
+
+    document.querySelector('#restaurantList').addEventListener('click', async (e) => {
+      const rateBtn = e.target.closest('.btn-rate');
+      if (rateBtn) {
+        const id = Number(rateBtn.getAttribute('data-id'));
+        openDialog(restaurantsCache.find((r) => r.id === id));
+        return;
+      }
+      const removeBtn = e.target.closest('.btn-remove');
+      if (removeBtn) {
+        const id = Number(removeBtn.getAttribute('data-id'));
+        const restaurant = restaurantsCache.find((r) => r.id === id);
+        if (!restaurant || !confirm(`'${restaurant.name}'을(를) 삭제할까요? 모든 평가가 함께 삭제됩니다.`)) return;
+        const result = await apiDeleteRestaurant(id);
+        if (result.ok) applyRestaurants(result.body);
       }
     });
 
@@ -171,7 +466,7 @@
     });
 
     document.querySelector('#btnStart').addEventListener('click', () => {
-      if (!ready) return;
+      if (!ready || isWatching) return;
       gtag && gtag('event', 'start', {
         'event_category': 'roulette',
         'event_label': 'start',
@@ -190,7 +485,14 @@
       }
       window.roulette.start();
       document.querySelector('#settings').classList.add('hide');
-      document.querySelector('#donate').classList.add('hide');
+
+      const layout = window.roulette.getMarbleLayout();
+      sendWs({ type: 'start', ...layout, hostNickname: getNickname() || '누군가' });
+
+      stopBroadcasting();
+      broadcastInterval = setInterval(() => {
+        sendWs({ type: 'frame', ...window.roulette.getSnapshotForBroadcast() });
+      }, 50);
     });
 
     document.querySelector('#chkAutoRecording').addEventListener('change', (e) => {
@@ -227,9 +529,14 @@
 
     window.roulette.addEventListener('goal', () => {
       ready = false;
+      if (broadcastInterval) {
+        // 방금 확정된 winnerId가 담긴 마지막 프레임을 반드시 한 번 더 보낸 뒤 중계를 멈춘다
+        sendWs({ type: 'frame', ...window.roulette.getSnapshotForBroadcast() });
+      }
+      stopBroadcasting();
       setTimeout(() => {
         document.querySelector('#settings').classList.remove('hide');
-        document.querySelector('#donate').classList.remove('hide');
+        stopWatching();
       }, 3000);
     });
 
@@ -258,6 +565,7 @@
       mapSelector.append(option);
     });
     mapSelector.addEventListener('change', (e) => {
+      if (isWatching) return;
       const index = e.target.value;
       window.roulette.setMap(index);
     });
@@ -295,22 +603,6 @@
       openNotice();
     });
 
-    function simpleToast(msg) {
-      const toast = document.createElement('div');
-      toast.classList.add('toast');
-      toast.innerHTML = msg;
-
-      if (window.translateElement) {
-        console.log('try to translate');
-        window.translateElement(toast);
-      }
-
-      document.body.appendChild(toast);
-      setTimeout(() => {
-        document.body.removeChild(toast);
-      }, 1200);
-    }
-
     const checkNotice = () => {
       const lastViewed = localStorage.getItem(noticeKey);
       console.log('lastViewed', lastViewed);
@@ -322,6 +614,18 @@
     checkNotice();
   }
 </script>
+<div id="nicknameGate" class="nickname-gate">
+  <div class="nickname-gate-card">
+    <h2>점심 메뉴 룰렛</h2>
+    <p>닉네임을 선택해주세요</p>
+    <div class="nickname-options">
+      <button class="btn-nickname" data-nickname="lm">lm</button>
+      <button class="btn-nickname" data-nickname="zv">zv</button>
+      <button class="btn-nickname" data-nickname="kb">kb</button>
+      <button class="btn-nickname" data-nickname="ko">ko</button>
+    </div>
+  </div>
+</div>
 <div id="settings" class="settings">
   <div class="right">
     <button id="btnToggleSettings" class="btn-toggle-settings">
@@ -373,8 +677,16 @@
     </div>
   </div>
   <div class="left">
-    <h3 data-trans>Enter names below</h3>
-    <textarea id="in_names" placeholder="Input names separated by commas or line feed here" data-trans="placeholder">수박*2,키위*2,귤*2</textarea>
+    <div class="nickname-bar">
+      <span id="currentNicknameLabel"></span>
+      <button id="btnChangeNickname" class="btn">닉네임 변경</button>
+    </div>
+    <div class="restaurant-header">
+      <h3>점심 메뉴 목록</h3>
+      <button id="btnOpenAddDialog" class="btn">+ 메뉴 추가/평가</button>
+    </div>
+    <ul id="restaurantList" class="restaurant-list"></ul>
+    <textarea id="in_names" readonly class="visually-hidden"></textarea>
     <div class="actions">
       <button id="btnNotice">
         <i class="icon megaphone"></i>
@@ -394,6 +706,38 @@
     </div>
   </div>
 </div>
+<dialog id="restaurantDialog" class="restaurant-dialog">
+  <form id="restaurantForm">
+    <h3>메뉴 추가 / 평가</h3>
+    <label for="dlg_name">식당 이름</label>
+    <input type="text" id="dlg_name" list="restaurantNames" placeholder="식당 이름" required />
+    <datalist id="restaurantNames"></datalist>
+
+    <label for="dlg_taste">맛 (1~10)</label>
+    <input type="number" id="dlg_taste" min="1" max="10" value="5" required />
+
+    <label for="dlg_distance">거리</label>
+    <select id="dlg_distance">
+      <option value="near">가까움</option>
+      <option value="medium" selected>중간</option>
+      <option value="far">멀음</option>
+    </select>
+
+    <div id="dlg_mealTicketRow">
+      <label for="dlg_mealTicket">식권대장</label>
+      <select id="dlg_mealTicket">
+        <option value="O">O</option>
+        <option value="X" selected>X</option>
+      </select>
+    </div>
+    <div id="dlg_mealTicketDisplay" class="hide"></div>
+
+    <div class="dialog-actions">
+      <button type="button" id="btnCancelDialog">취소</button>
+      <button type="submit" class="btn">저장</button>
+    </div>
+  </form>
+</dialog>
 <div id="notice">
   <h1>Notice</h1>
   <div class="notice-body">

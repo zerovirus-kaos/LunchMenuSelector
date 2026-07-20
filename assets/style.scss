@@ -10,6 +10,67 @@
   box-sizing: border-box;
 }
 
+.visually-hidden {
+  display: none;
+}
+
+html:not(.nick-chosen) {
+  canvas, #settings, #notice, div.copyright {
+    display: none !important;
+  }
+}
+
+html.nick-chosen #nicknameGate {
+  display: none !important;
+}
+
+.nickname-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #333;
+}
+
+.nickname-gate-card {
+  background: #666;
+  border-radius: 10px;
+  padding: 1.5rem;
+  width: 320px;
+  max-width: 90%;
+  color: white;
+  text-align: center;
+
+  h2 {
+    margin: 0 0 .5rem 0;
+  }
+
+  p {
+    margin: 0 0 1rem 0;
+    font-size: 13px;
+    opacity: .8;
+  }
+
+  .nickname-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .btn-nickname {
+    padding: 14px 0;
+    font-size: 16px;
+    font-weight: bold;
+    color: #fefefe;
+    background: #222;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+}
+
 canvas {
   position: fixed;
   inset: 0;
@@ -185,6 +246,79 @@ div.copyright a {
         flex-grow: 1;
       }
     }
+
+    .nickname-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+
+      #currentNicknameLabel {
+        flex: 1 1 auto;
+        color: white;
+        font-weight: bold;
+      }
+    }
+
+    .restaurant-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+
+      h3 {
+        flex: 1 1 auto;
+      }
+    }
+
+    ul.restaurant-list {
+      list-style: none;
+      margin: 0 0 8px 0;
+      padding: 0;
+      max-height: 8rem;
+      overflow-y: auto;
+
+      li {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        background: #777;
+        border-radius: 5px;
+        padding: 4px 8px;
+        margin-bottom: 4px;
+        color: white;
+        font-size: 12px;
+
+        .r-name {
+          flex: 1 1 auto;
+          font-weight: bold;
+        }
+
+        .r-meal, .r-score, .r-count, .r-raters {
+          flex: 0 0 auto;
+          opacity: .8;
+        }
+
+        .btn-rate, .btn-remove {
+          flex: 0 0 auto;
+          border: none;
+          border-radius: 4px;
+          color: white;
+          font-size: 11px;
+          padding: 2px 6px;
+          cursor: pointer;
+        }
+
+        .btn-rate {
+          background: #227;
+        }
+
+        .btn-remove {
+          background: #a33;
+        }
+      }
+    }
   }
 
   .btn-toggle-settings {
@@ -315,6 +449,69 @@ div.copyright a {
     input[type=number] {
       box-sizing: border-box;
       text-align: center;
+    }
+  }
+}
+
+.restaurant-dialog {
+  border: none;
+  border-radius: 10px;
+  padding: 1rem;
+  background: #666;
+  color: white;
+  width: 320px;
+  max-width: 90%;
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .hide {
+    display: none;
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  h3 {
+    margin: 0 0 4px 0;
+  }
+
+  label {
+    font-size: 12px;
+  }
+
+  input, select {
+    height: 28px;
+    border-radius: 5px;
+    border: none;
+    background: #999;
+    color: #222;
+    padding: 0 6px;
+  }
+
+  #dlg_mealTicketDisplay {
+    background: #777;
+    border-radius: 5px;
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+
+  .dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 6px;
+
+    button {
+      color: #fefefe;
+      background: #222;
+      border: none;
+      border-radius: 5px;
+      padding: 5px 10px;
     }
   }
 }

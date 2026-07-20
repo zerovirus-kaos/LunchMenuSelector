@@ -9,15 +9,34 @@ import { Minimap } from './minimap';
 import options from './options';
 import { ParticleManager } from './particleManager';
 import { Box2dPhysics } from './physics-box2d';
+import { RemotePhysics } from './physics-remote';
 import { RankRenderer } from './rankRenderer';
 import { RouletteRenderer } from './rouletteRenderer';
 import { SkillEffect } from './skillEffect';
 import type { ColorTheme } from './types/ColorTheme';
+import type { MapEntityState } from './types/MapEntity.type';
 import type { MouseEventHandlerName, MouseEventName } from './types/mouseEvents.type';
 import type { UIObject } from './UIObject';
 import { bound } from './utils/bound.decorator';
 import { parseName, shuffle } from './utils/utils';
 import { VideoRecorder } from './utils/videoRecorder';
+
+export type MarbleLayoutEntry = { order: number; name: string; weight: number };
+
+export type RemoteStartPayload = {
+  mapIndex: number;
+  layout: MarbleLayoutEntry[];
+  totalCount: number;
+  winnerRank: number;
+};
+
+export type RemoteFramePayload = {
+  positions: { id: number; x: number; y: number; angle: number }[];
+  entities: MapEntityState[];
+  camera: { x: number; y: number; zoom: number };
+  winnerIds: number[];
+  winnerId: number | null;
+};
 
 export class Roulette extends EventTarget {
   private _marbles: Marble[] = [];
@@ -50,6 +69,10 @@ export class Roulette extends EventTarget {
   private _recorder!: VideoRecorder;
 
   private physics!: IPhysics;
+
+  private _isRemote: boolean = false;
+  private _remotePhysics: RemotePhysics | null = null;
+  private _lastMarbleLayout: MarbleLayoutEntry[] = [];
 
   private _isReady: boolean = false;
   protected fastForwarder!: FastForwader;
@@ -109,8 +132,10 @@ export class Roulette extends EventTarget {
     const interval = (this._updateInterval / 1000) * this._timeScale;
 
     while (this._elapsed >= this._updateInterval) {
-      this.physics.step(interval);
-      this._updateMarbles(this._updateInterval);
+      if (!this._isRemote) {
+        this.physics.step(interval);
+        this._updateMarbles(this._updateInterval);
+      }
       this._particleManager.update(this._updateInterval);
       this._updateEffects(this._updateInterval);
       this._elapsed -= this._updateInterval;
@@ -121,7 +146,7 @@ export class Roulette extends EventTarget {
       this._marbles.sort((a, b) => b.y - a.y);
     }
 
-    if (this._stage) {
+    if (this._stage && !this._isRemote) {
       this._camera.update({
         marbles: this._marbles,
         stage: this._stage,
@@ -147,9 +172,9 @@ export class Roulette extends EventTarget {
       if (marble.y > this._stage.goalY) {
         this._winners.push(marble);
         if (this._isRunning && this._winners.length === this._winnerRank + 1) {
-          this.dispatchEvent(new CustomEvent('goal', { detail: { winner: marble.name } }));
           this._winner = marble;
           this._isRunning = false;
+          this.dispatchEvent(new CustomEvent('goal', { detail: { winner: marble.name } }));
           this._particleManager.shot(this._renderer.width, this._renderer.height);
           setTimeout(() => {
             this._recorder.stop();
@@ -159,13 +184,13 @@ export class Roulette extends EventTarget {
           this._winnerRank === this._winners.length &&
           this._winnerRank === this._totalMarbleCount - 1
         ) {
+          this._winner = this._marbles[i + 1];
+          this._isRunning = false;
           this.dispatchEvent(
             new CustomEvent('goal', {
               detail: { winner: this._marbles[i + 1].name },
             })
           );
-          this._winner = this._marbles[i + 1];
-          this._isRunning = false;
           this._particleManager.shot(this._renderer.width, this._renderer.height);
           setTimeout(() => {
             this._recorder.stop();
@@ -385,15 +410,18 @@ export class Roulette extends EventTarget {
         .fill(0)
         .map((_, i) => i)
     );
+    const layout: MarbleLayoutEntry[] = [];
     members.forEach((member) => {
       if (member) {
         for (let j = 0; j < member.count; j++) {
           const order = orders.pop() || 0;
           this._marbles.push(new Marble(this.physics, order, totalCount, member.name, member.weight));
+          layout.push({ order, name: member.name, weight: member.weight });
         }
       }
     });
     this._totalMarbleCount = totalCount;
+    this._lastMarbleLayout = layout;
 
     // 카메라를 구슬 생성 위치 중앙으로 이동 + 줌인
     if (totalCount > 0) {
@@ -450,5 +478,99 @@ export class Roulette extends EventTarget {
     this._stage = stages[index];
     this.setMarbles(names);
     this._camera.initializePosition();
+  }
+
+  public get isRemote() {
+    return this._isRemote;
+  }
+
+  public getMarbleLayout(): RemoteStartPayload {
+    return {
+      mapIndex: this._stage ? Math.max(0, stages.indexOf(this._stage)) : 0,
+      layout: this._lastMarbleLayout,
+      totalCount: this._totalMarbleCount,
+      winnerRank: this._winnerRank,
+    };
+  }
+
+  public getSnapshotForBroadcast(): RemoteFramePayload {
+    return {
+      positions: this._marbles.map((marble) => ({ id: marble.id, x: marble.x, y: marble.y, angle: marble.angle })),
+      entities: this.physics.getEntities(),
+      camera: { x: this._camera.x, y: this._camera.y, zoom: this._camera.zoom },
+      winnerIds: this._winners.map((marble) => marble.id),
+      winnerId: this._winner ? this._winner.id : null,
+    };
+  }
+
+  public enterRemoteMode(payload: RemoteStartPayload) {
+    this.physics.clearMarbles();
+    this.physics.clear();
+
+    this._remotePhysics = new RemotePhysics();
+    this.physics = this._remotePhysics;
+    this._stage = stages[payload.mapIndex] ?? stages[0];
+    this._winnerRank = payload.winnerRank;
+    this._totalMarbleCount = payload.totalCount;
+    this._winners = [];
+    this._winner = null;
+    this._effects = [];
+    this._goalDist = Infinity;
+
+    this._marbles = payload.layout.map(
+      (m) => new Marble(this.physics, m.order, payload.totalCount, m.name, m.weight)
+    );
+    this._marbles.forEach((marble) => (marble.isActive = true));
+
+    this._isRemote = true;
+    this._isRunning = true;
+    this._camera.startFollowingMarbles();
+  }
+
+  public applyRemoteFrame(frame: RemoteFramePayload) {
+    if (!this._isRemote || !this._remotePhysics) return;
+
+    frame.positions.forEach((p) => this._remotePhysics?.setMarbleState(p.id, p.x, p.y, p.angle));
+    this._remotePhysics.setEntities(frame.entities);
+
+    frame.winnerIds.forEach((id) => {
+      if (this._winners.some((marble) => marble.id === id)) return;
+      const idx = this._marbles.findIndex((marble) => marble.id === id);
+      if (idx !== -1) {
+        const [marble] = this._marbles.splice(idx, 1);
+        this._winners.push(marble);
+      }
+    });
+
+    this._camera.setPosition({ x: frame.camera.x, y: frame.camera.y }, true);
+    this._camera.zoom = frame.camera.zoom;
+
+    if (frame.winnerId != null && !this._winner) {
+      const winner = this._winners.find((marble) => marble.id === frame.winnerId) || null;
+      if (winner) {
+        this._winner = winner;
+        this._isRunning = false;
+        this._particleManager.shot(this._renderer.width, this._renderer.height);
+        this.dispatchEvent(new CustomEvent('goal', { detail: { winner: winner.name } }));
+      }
+    }
+  }
+
+  public exitRemoteMode() {
+    if (!this._isRemote) return;
+    this._remotePhysics = null;
+    this._marbles = [];
+    this._winners = [];
+    this._winner = null;
+    this._effects = [];
+
+    // 새 Box2D 월드가 완전히 초기화되기 전까지는 리모트 모드를 유지해서
+    // _update()가 아직 준비되지 않은 physics.step()을 호출하지 않게 한다.
+    const newPhysics = new Box2dPhysics();
+    newPhysics.init().then(() => {
+      this.physics = newPhysics;
+      this._loadMap();
+      this._isRemote = false;
+    });
   }
 }

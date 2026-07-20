@@ -2,6 +2,8 @@
 node_modules
 .parcel-cache
 dist
+dist-app
+server/data
 yarn-error.log
 dist-custom
 dist-preview

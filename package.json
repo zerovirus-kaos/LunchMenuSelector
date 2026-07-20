@@ -2,21 +2,29 @@
   "name": "roulette",
   "version": "1.0.0",
   "license": "MIT",
+  "type": "module",
   "devDependencies": {
     "@biomejs/biome": "2.4.4",
     "@parcel/packager-raw-url": "^2.16.4",
     "@parcel/transformer-sass": "^2.16.4",
     "@parcel/transformer-webmanifest": "^2.16.4",
+    "concurrently": "^10.0.3",
     "parcel": "^2.16.4",
     "typescript": "^5.6.3",
     "workbox-build": "7.4.0"
   },
   "scripts": {
     "lint": "biome check --fix src/",
-    "dev": "parcel index.html --port 1235",
-    "build": "parcel build index.html --public-url /roulette/ && node scripts/build-sw.js"
+    "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:client": "parcel index.html --port 1235",
+    "dev:server": "node --watch server/index.js",
+    "build": "parcel build index.html --public-url /roulette/ && node scripts/build-sw.js",
+    "build:app": "parcel build index.html --public-url / --dist-dir dist-app",
+    "start": "NODE_ENV=production node server/index.js"
   },
   "dependencies": {
-    "box2d-wasm": "^7.0.0"
+    "box2d-wasm": "^7.0.0",
+    "express": "^5.2.1",
+    "ws": "^8.21.1"
   }
 }
