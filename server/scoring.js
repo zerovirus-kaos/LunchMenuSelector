@@ -1,5 +1,9 @@
 export const DISTANCE_SCORE = { near: 3, medium: 2, far: 1 };
-export const MEAL_TICKET_BONUS = { O: 2, X: 0 };
+
+// 맛의 비중이 가장 크도록 항목별 가중치를 명시적으로 둔다 (합계 100점 만점)
+const TASTE_WEIGHT = 60;
+const DISTANCE_WEIGHT = 25;
+const MEAL_TICKET_WEIGHT = 15;
 
 function average(values) {
   if (values.length === 0) return 0;
@@ -7,9 +11,14 @@ function average(values) {
 }
 
 export function calcScore(ratings, mealTicket) {
-  const avgTaste = average(ratings.map((r) => r.taste));
-  const avgDistance = average(ratings.map((r) => DISTANCE_SCORE[r.distance]));
-  return avgTaste + avgDistance + MEAL_TICKET_BONUS[mealTicket];
+  const avgTaste = average(ratings.map((r) => r.taste)); // 1~10
+  const avgDistance = average(ratings.map((r) => DISTANCE_SCORE[r.distance])); // 1~3
+
+  const tasteNorm = avgTaste / 10; // 0~1
+  const distanceNorm = (avgDistance - 1) / 2; // 1~3 -> 0~1 (near=1, far=0)
+  const mealTicketNorm = mealTicket === 'O' ? 1 : 0;
+
+  return tasteNorm * TASTE_WEIGHT + distanceNorm * DISTANCE_WEIGHT + mealTicketNorm * MEAL_TICKET_WEIGHT;
 }
 
 // 점수 비율대로 total개를 배분하되, 최대잉여법으로 합계가 정확히 total이 되도록 맞춤

@@ -10,6 +10,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const DISTANCE_VALUES = ['near', 'medium', 'far'];
 const MEAL_TICKET_VALUES = ['O', 'X'];
+const TOTAL_BALLS = 200;
 
 const app = express();
 app.use(express.json());
@@ -25,7 +26,7 @@ function validateRating(body) {
 function withScores() {
   const restaurants = getRestaurants();
   const scores = restaurants.map((r) => calcScore(r.ratings, r.mealTicket));
-  const ballCounts = distributeBalls(scores, 100);
+  const ballCounts = distributeBalls(scores, TOTAL_BALLS);
 
   return restaurants.map((r, i) => ({
     ...r,
