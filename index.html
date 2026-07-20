@@ -70,7 +70,7 @@
 
   function getReady() {
     const names = getNames();
-    if (!isWatching) {
+    if (!isWatching && !raceRunning) {
       window.roulette.setMarbles(names);
     }
     ready = names.length > 0;
@@ -116,6 +116,7 @@
   let ws = null;
   let broadcastInterval = null;
   let isWatching = false;
+  let raceRunning = false;
 
   function connectWs(useDirect) {
     const protocol = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -484,6 +485,7 @@
         });
       }
       window.roulette.start();
+      raceRunning = true;
       document.querySelector('#settings').classList.add('hide');
 
       const layout = window.roulette.getMarbleLayout();
@@ -529,6 +531,7 @@
 
     window.roulette.addEventListener('goal', () => {
       ready = false;
+      raceRunning = false;
       if (broadcastInterval) {
         // 방금 확정된 winnerId가 담긴 마지막 프레임을 반드시 한 번 더 보낸 뒤 중계를 멈춘다
         sendWs({ type: 'frame', ...window.roulette.getSnapshotForBroadcast() });

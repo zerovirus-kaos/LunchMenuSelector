@@ -62,6 +62,7 @@ export class Roulette extends EventTarget {
   private _goalDist: number = Infinity;
   private _isRunning: boolean = false;
   private _winner: Marble | null = null;
+  private _updateErrorReported: boolean = false;
 
   private _uiObjects: UIObject[] = [];
 
@@ -120,43 +121,56 @@ export class Roulette extends EventTarget {
 
   @bound
   private _update() {
-    if (!this._lastTime) this._lastTime = Date.now();
-    const currentTime = Date.now();
+    try {
+      if (!this._lastTime) this._lastTime = Date.now();
+      const currentTime = Date.now();
 
-    this._elapsed += (currentTime - this._lastTime) * this._speed * this.fastForwarder.speed;
-    if (this._elapsed > 100) {
-      this._elapsed %= 100;
-    }
-    this._lastTime = currentTime;
-
-    const interval = (this._updateInterval / 1000) * this._timeScale;
-
-    while (this._elapsed >= this._updateInterval) {
-      if (!this._isRemote) {
-        this.physics.step(interval);
-        this._updateMarbles(this._updateInterval);
+      this._elapsed += (currentTime - this._lastTime) * this._speed * this.fastForwarder.speed;
+      if (this._elapsed > 100) {
+        this._elapsed %= 100;
       }
-      this._particleManager.update(this._updateInterval);
-      this._updateEffects(this._updateInterval);
-      this._elapsed -= this._updateInterval;
-      this._uiObjects.forEach((obj) => obj.update(this._updateInterval));
-    }
+      this._lastTime = currentTime;
 
-    if (this._marbles.length > 1) {
-      this._marbles.sort((a, b) => b.y - a.y);
-    }
+      const interval = (this._updateInterval / 1000) * this._timeScale;
 
-    if (this._stage && !this._isRemote) {
-      this._camera.update({
-        marbles: this._marbles,
-        stage: this._stage,
-        needToZoom: this._goalDist < zoomThreshold,
-        targetIndex: this._winners.length > 0 ? this._winnerRank - this._winners.length : 0,
-      });
-    }
+      while (this._elapsed >= this._updateInterval) {
+        if (!this._isRemote) {
+          this.physics.step(interval);
+          this._updateMarbles(this._updateInterval);
+        }
+        this._particleManager.update(this._updateInterval);
+        this._updateEffects(this._updateInterval);
+        this._elapsed -= this._updateInterval;
+        this._uiObjects.forEach((obj) => obj.update(this._updateInterval));
+      }
 
-    this._render();
-    window.requestAnimationFrame(this._update);
+      if (this._marbles.length > 1) {
+        this._marbles.sort((a, b) => b.y - a.y);
+      }
+
+      if (this._stage && !this._isRemote) {
+        this._camera.update({
+          marbles: this._marbles,
+          stage: this._stage,
+          needToZoom: this._goalDist < zoomThreshold,
+          targetIndex: this._winners.length > 0 ? this._winnerRank - this._winners.length : 0,
+        });
+      }
+
+      this._render();
+    } catch (err) {
+      // 프레임 하나에서 에러가 나도 애니메이션 루프 자체는 죽지 않도록 방어
+      // (requestAnimationFrame 재호출이 finally에 있어야 다음 프레임이 계속 돔)
+      console.error('Roulette update loop error:', err);
+      if (!this._updateErrorReported) {
+        this._updateErrorReported = true;
+        this.dispatchEvent(
+          new CustomEvent('message', { detail: '오류가 발생했습니다. 화면이 이상하면 새로고침 해주세요.' })
+        );
+      }
+    } finally {
+      window.requestAnimationFrame(this._update);
+    }
   }
 
   private _updateMarbles(deltaTime: number) {
@@ -184,11 +198,13 @@ export class Roulette extends EventTarget {
           this._winnerRank === this._winners.length &&
           this._winnerRank === this._totalMarbleCount - 1
         ) {
-          this._winner = this._marbles[i + 1];
+          // 동시에 여러 마블이 골인하는 등 드문 상황에서 i+1이 없을 수 있어 방어적으로 처리
+          const lastMarble = this._marbles[i + 1] || marble;
+          this._winner = lastMarble;
           this._isRunning = false;
           this.dispatchEvent(
             new CustomEvent('goal', {
-              detail: { winner: this._marbles[i + 1].name },
+              detail: { winner: lastMarble.name },
             })
           );
           this._particleManager.shot(this._renderer.width, this._renderer.height);
@@ -455,6 +471,7 @@ export class Roulette extends EventTarget {
     this._clearMap();
     this._loadMap();
     this._goalDist = Infinity;
+    this._updateErrorReported = false;
   }
 
   public getCount() {
@@ -516,6 +533,7 @@ export class Roulette extends EventTarget {
     this._winner = null;
     this._effects = [];
     this._goalDist = Infinity;
+    this._updateErrorReported = false;
 
     this._marbles = payload.layout.map(
       (m) => new Marble(this.physics, m.order, payload.totalCount, m.name, m.weight)
