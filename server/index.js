@@ -46,6 +46,9 @@ app.post('/api/restaurants', (req, res) => {
   if (typeof name !== 'string' || !name.trim()) {
     return res.status(400).json({ error: 'invalid', message: '식당 이름이 필요합니다.' });
   }
+  if (/\s/.test(name)) {
+    return res.status(400).json({ error: 'invalid', message: '식당 이름에 띄어쓰기를 넣을 수 없습니다.' });
+  }
   if (!MEAL_TICKET_VALUES.includes(mealTicket)) {
     return res.status(400).json({ error: 'invalid', message: '식권대장 여부가 올바르지 않습니다.' });
   }

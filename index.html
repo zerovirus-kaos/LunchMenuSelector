@@ -115,6 +115,27 @@
   let restaurantsCache = [];
   let pendingEditId = null;
   let matchedRestaurant = null;
+  let mealTicketFilter = 'all';
+
+  const TOTAL_BALLS = 200;
+
+  // 필터(전체/O만/X만)로 걸러진 부분집합만으로 100~200개 분배를 다시 계산한다
+  // (서버가 계산한 ballCount는 전체 목록 기준이라 필터링 시 그대로 못 씀)
+  function distributeBallsLocal(scores, total) {
+    if (scores.length === 0) return [];
+    const totalScore = scores.reduce((a, b) => a + b, 0);
+    if (totalScore <= 0) return scores.map(() => 0);
+    const raw = scores.map((s) => (s / totalScore) * total);
+    const counts = raw.map(Math.floor);
+    const remainder = total - counts.reduce((a, b) => a + b, 0);
+    const fracOrder = raw
+      .map((v, i) => ({ i, frac: v - counts[i] }))
+      .sort((a, b) => b.frac - a.frac);
+    for (let k = 0; k < remainder; k++) {
+      counts[fracOrder[k % fracOrder.length].i]++;
+    }
+    return counts;
+  }
 
   let ws = null;
   let broadcastInterval = null;
@@ -266,17 +287,23 @@
   function applyRestaurants(list, pushToEngine = true) {
     restaurantsCache = list;
     const nickname = getNickname();
+
+    const filtered = list.filter((r) => mealTicketFilter === 'all' || r.mealTicket === mealTicketFilter);
+    const filteredCounts = distributeBallsLocal(filtered.map((r) => r.score), TOTAL_BALLS);
+    const countById = new Map(filtered.map((r, i) => [r.id, filteredCounts[i]]));
+
     const listEl = document.querySelector('#restaurantList');
     listEl.innerHTML = '';
 
     list.forEach((r) => {
       const mine = r.ratings.find((rt) => rt.nickname === nickname);
+      const count = countById.get(r.id) || 0;
       const li = document.createElement('li');
       li.innerHTML = `
         <span class="r-name">${escapeHtml(r.name)}</span>
         <span class="r-meal">식권대장 ${r.mealTicket}</span>
         <span class="r-score">점수 ${r.score.toFixed(1)}</span>
-        <span class="r-count">${r.ballCount}개</span>
+        <span class="r-count">${count}개</span>
         <span class="r-raters">${r.raterCount}명 평가</span>
         <button class="btn-rate" data-id="${r.id}">${mine ? '평가 수정' : '평가하기'}</button>
         <button class="btn-remove" data-id="${r.id}">삭제</button>
@@ -287,8 +314,8 @@
     const datalist = document.querySelector('#restaurantNames');
     datalist.innerHTML = list.map((r) => `<option value="${escapeHtml(r.name)}"></option>`).join('');
 
-    const namesStr = list
-      .map((r) => (r.ballCount > 0 ? `${r.name}*${r.ballCount}` : null))
+    const namesStr = filtered
+      .map((r) => (countById.get(r.id) > 0 ? `${r.name}*${countById.get(r.id)}` : null))
       .filter((v) => !!v)
       .join(',');
 
@@ -402,6 +429,12 @@
       openDialog(null);
     });
 
+    document.querySelector('#sltMealTicketFilter').addEventListener('change', (e) => {
+      mealTicketFilter = e.target.value;
+      raceRunning = false;
+      applyRestaurants(restaurantsCache);
+    });
+
     document.querySelector('#btnCancelDialog').addEventListener('click', () => {
       document.querySelector('#restaurantDialog').close();
     });
@@ -411,6 +444,11 @@
     });
 
     document.querySelector('#dlg_name').addEventListener('input', (e) => {
+      if (/\s/.test(e.target.value)) {
+        const cursor = e.target.selectionStart - 1;
+        e.target.value = e.target.value.replace(/\s/g, '');
+        e.target.setSelectionRange(Math.max(0, cursor), Math.max(0, cursor));
+      }
       if (pendingEditId !== null) return;
       const typed = e.target.value.trim().toLowerCase();
       matchedRestaurant = restaurantsCache.find((r) => r.name.toLowerCase() === typed) || null;
@@ -699,6 +737,11 @@
     </div>
     <div class="restaurant-header">
       <h3>점심 메뉴 목록</h3>
+      <select id="sltMealTicketFilter">
+        <option value="all">전체</option>
+        <option value="O">식권대장 O만</option>
+        <option value="X">식권대장 X만</option>
+      </select>
       <button id="btnOpenAddDialog" class="btn">+ 메뉴 추가/평가</button>
     </div>
     <ul id="restaurantList" class="restaurant-list"></ul>
@@ -726,7 +769,7 @@
   <form id="restaurantForm">
     <h3>메뉴 추가 / 평가</h3>
     <label for="dlg_name">식당 이름</label>
-    <input type="text" id="dlg_name" list="restaurantNames" placeholder="식당 이름" required />
+    <input type="text" id="dlg_name" list="restaurantNames" placeholder="식당 이름 (띄어쓰기 없이)" required />
     <datalist id="restaurantNames"></datalist>
 
     <label for="dlg_taste">맛 (1~10)</label>
